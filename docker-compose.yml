@@ -1,0 +1,82 @@
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.0.1
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+
+  kafka:
+    image: confluentinc/cp-kafka:7.0.1
+    container_name: kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+      - "29092:29092" 
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_HOST://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+
+  kafka-topics-init:
+    image: confluentinc/cp-kafka:7.0.1
+    depends_on:
+      - kafka
+    entrypoint: >
+      sh -c '
+      echo "Waiting for Kafka to be ready..." &&
+      cub kafka-ready -b kafka:9092 1 30 &&
+      kafka-topics --create --if-not-exists --topic transactions --bootstrap-server kafka:9092 --replication-factor 1 --partitions 3 &&
+      kafka-topics --create --if-not-exists --topic alerts --bootstrap-server kafka:9092 --replication-factor 1 --partitions 3 &&
+      kafka-topics --create --if-not-exists --topic explanations --bootstrap-server kafka:9092 --replication-factor 1 --partitions 3 &&
+      kafka-topics --create --if-not-exists --topic performance-metrics --bootstrap-server kafka:9092 --replication-factor 1 --partitions 3
+      '
+
+
+  spark-master:
+    image: bitnami/spark:3.5.1
+    container_name: spark-master
+    ports:
+      - "8888:8080" # Spark Master UI
+      - "7077:7077"
+      - "8501:8501"
+    volumes:
+      - ./src:/home/n00b/workspace/ArtificialIntelligence/Dissertation/src
+      - ./artifacts:/home/n00b/workspace/ArtificialIntelligence/Dissertation/artifacts
+      - pip_cache:/.cache/pip
+    command: >
+      /bin/bash -c "
+        pip install -r /home/n00b/workspace/ArtificialIntelligence/Dissertation/src/v1/requirements.txt &&
+        /opt/bitnami/spark/sbin/start-master.sh
+      "
+
+  spark-worker:
+    image: bitnami/spark:3.5.1
+    container_name: spark-worker
+    depends_on:
+      - spark-master
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - SPARK_WORKER_MEMORY=5g
+      - SPARK_EXECUTOR_MEMORY=2g
+    volumes:
+      - ./src:/home/n00b/workspace/ArtificialIntelligence/Dissertation/src
+      - ./artifacts:/home/n00b/workspace/ArtificialIntelligence/Dissertation/artifacts
+      - pip_cache:/.cache/pip
+    command: >
+      /bin/bash -c "
+        pip install -r /home/n00b/workspace/ArtificialIntelligence/Dissertation/src/v1/requirements.txt &&
+        /opt/bitnami/spark/sbin/start-worker.sh spark://spark-master:7077
+      "
+
+volumes:
+  pip_cache:

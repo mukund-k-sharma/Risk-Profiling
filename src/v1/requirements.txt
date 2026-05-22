@@ -1,0 +1,18 @@
+joblib==1.4.2
+numpy==1.26.4
+pandas==2.3.1
+scikit-learn==1.7.1
+shap==0.45.1
+matplotlib==3.9.0
+kafka-python==2.0.2
+pyarrow
+seaborn
+pytz
+python-dateutil
+scipy==1.16.1
+numba==0.61.2
+torch==2.3.1 --extra-index-url https://download.pytorch.org/whl/cpu
+river==0.22.0
+streamlit
+altair
+streamlit_autorefresh
