@@ -75,9 +75,6 @@ papers/
 .claudeignore
 CLAUDE.md
 
-# ─── Dev notes (superseded by README.md) ──────────────────
-readme.md
-
 # ─── Legacy / deprecated source files ─────────────────────
 src/v1/streaming_app_v[1-4].py
 src/v1/dashbaord_debug.py

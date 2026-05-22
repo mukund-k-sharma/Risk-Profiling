@@ -28,33 +28,28 @@ This reframes the problem: rather than asking *"Is this fraud?"*, the system ask
 
 ## System Architecture
 
-The system is a five-stage streaming pipeline built on production-grade infrastructure:
+The system is a decoupled, production-grade distributed microservices pipeline communicating entirely through Apache Kafka:
 
 ```mermaid
 flowchart LR
-    A["Transaction Source\n(PaySim CSV)"] --> B["Feature Engineering\n& Kafka Producer"]
-    B --> C["Apache Kafka\n(transactions topic)"]
-    C --> D["Spark Structured\nStreaming"]
-    D --> E["PyTorch Autoencoder\n(reconstruction error)"]
-    E --> F["Stateful Risk Scorer\n(per-user Z-score)"]
-    F --> G["ADWIN Drift\nDetection"]
-    G --> H["SHAP Explainer"]
+    A["Raw Transaction Stream\n(PaySim CSV)"] --> B["/ingestion\n(Kafka Producer)"]
+    B -->|"transactions"| C["/feature_engineering\n(Pydantic Validation & Scaler)"]
+    C -->|"featured-transactions"| D["/model_inference\n(PyTorch Autoencoder Forward Pass)"]
+    D -->|"reconstruction-errors"| E["/scoring\n(Z-Score, ADWIN, SHAP)"]
     
-    F -->|"alerts"| I["Kafka Topics"]
-    H -->|"explanations"| I
-    F -->|"metrics"| I
-    I --> J["Streamlit\nDashboard"]
+    E -->|"alerts\nexplanations\nperformance-metrics"| F["Apache Kafka Topics"]
+    F --> G["/dashboard\n(Streamlit UI)"]
 ```
 
-### The Five Stages
+### The Decoupled Components
 
-| Stage | Component | What It Does |
-|-------|-----------|-------------|
-| **Ingest** | Kafka Producer | Reads PaySim transactions, publishes to `transactions` topic |
-| **Process** | Spark Structured Streaming | Consumes events, applies feature transformations |
-| **Detect** | PyTorch Autoencoder | Calculates per-transaction reconstruction error |
-| **Score** | Stateful Z-Score (per-user) | Normalizes error against user's behavioral history |
-| **Explain** | SHAP KernelExplainer | Generates feature-level explanations for flagged alerts |
+| Component | Technology | What It Does |
+|---|---|---|
+| **`/ingestion`** | Python + `kafka-python` | Streams ground truth/drift transactions into the `transactions` Kafka topic |
+| **`/feature_engineering`** | Python + Pydantic + joblib | Strict schema validation, scales raw transaction inputs via standard scaler |
+| **`/model_inference`** | PyTorch + Python | Evaluates the scaled transactions, outputs Mean Squared Error reconstruction loss |
+| **`/scoring`** | Python + river (ADWIN) + SHAP | Dynamic stateful Z-scoring, triggers ADWIN drift shifts, produces local explanations |
+| **`/dashboard`** | Streamlit + Altair | Interactive real-time metrics, ROC, drift feeds, and SHAP visualizers |
 
 ---
 
@@ -93,7 +88,7 @@ Where:
 - $e_t$ = reconstruction error for the current transaction
 - $\mu_w$, $\sigma_w$ = rolling mean and standard deviation from the user's recent transaction history (up to 100 transactions)
 
-This is implemented using Spark's `applyInPandasWithState`, which maintains a separate deque of reconstruction errors for every user. For new users with fewer than 5 transactions, the system falls back to **global statistics** (mean/std computed across all normal training data) to avoid cold-start instability.
+This is implemented in the stateful `/scoring` microservice, which maintains an in-memory queue of recent reconstruction errors for every active user. For new users with fewer than 5 transactions, the system falls back to **global statistics** (mean/std computed across all normal training data) loaded from `global_stats.json` to avoid cold-start instability.
 
 An alert is generated when `z_score > 2.5`.
 
@@ -187,14 +182,14 @@ The drift simulation test sends 55 normal transactions followed by 55 drifted tr
 
 | Component | Technology | Role |
 |-----------|-----------|------|
-| Streaming Platform | Apache Kafka 3.5.1 | High-throughput message broker |
-| Stream Processing | Apache Spark Structured Streaming | Stateful, distributed processing |
+| Streaming Platform | Apache Kafka 7.0.1 | High-throughput message broker |
+| Stream Processing | Standalone Python Processors | Stateful and stateless decoupled microservices |
 | Anomaly Detection | PyTorch 2.3.1 | Deep autoencoder model |
-| Preprocessing | scikit-learn + joblib | Feature scaling and serialization |
-| Drift Detection | river (ADWIN) | Concept drift monitoring |
-| Explainability | SHAP | Feature-level explanations |
+| Preprocessing | Pydantic + joblib | Strict schema validation and StandardScaler normalization |
+| Drift Detection | river (ADWIN) | Online concept drift monitoring |
+| Explainability | SHAP | Local feature attribution explanations |
 | Dashboard | Streamlit | Real-time monitoring UI |
-| Infrastructure | Docker Compose | ZooKeeper + Kafka + Spark cluster |
+| Infrastructure | Docker Compose | ZooKeeper + Kafka + 5 Microservices decoupled cluster |
 
 ---
 
@@ -214,7 +209,7 @@ The system was designed with regulatory compliance as a first-class concern:
 
 1. **Cold-start is real**: New users with no transaction history need a sensible fallback. Using global statistics as a prior (instead of refusing to score) was critical for production viability.
 
-2. **Stateful streaming is hard**: Spark's `applyInPandasWithState` is powerful but unforgiving. Serializing ADWIN detectors via `pickle` into the state store required careful handling to avoid state corruption.
+2. **Stateful streaming is hard**: Maintaining states like user transaction deques and online ADWIN detectors across asynchronous streams requires careful in-memory state tracking. Designing decoupled microservices with dedicated consumer/producer pairs keeps the state localized, making the pipeline highly maintainable compared to monolithic frameworks.
 
 3. **Unsupervised ≠ no evaluation**: Just because the model doesn't use labels for training doesn't mean you can skip evaluation. The PaySim ground truth was essential for validating that the system actually catches fraud.
 

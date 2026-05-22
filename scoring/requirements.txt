@@ -1,0 +1,12 @@
+kafka-python==2.0.2
+river==0.22.0
+shap==0.45.1
+torch==2.3.1 --extra-index-url https://download.pytorch.org/whl/cpu
+joblib==1.4.2
+pandas==2.3.1
+numpy==1.26.4
+scikit-learn==1.7.1
+scipy==1.16.1
+numba==0.61.2
+pytz
+python-dateutil

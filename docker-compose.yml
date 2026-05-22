@@ -1,3 +1,5 @@
+version: '3.8'
+
 services:
   zookeeper:
     image: confluentinc/cp-zookeeper:7.0.1
@@ -15,7 +17,7 @@ services:
       - zookeeper
     ports:
       - "9092:9092"
-      - "29092:29092" 
+      - "29092:29092"
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
@@ -35,48 +37,83 @@ services:
       echo "Waiting for Kafka to be ready..." &&
       cub kafka-ready -b kafka:9092 1 30 &&
       kafka-topics --create --if-not-exists --topic transactions --bootstrap-server kafka:9092 --replication-factor 1 --partitions 3 &&
+      kafka-topics --create --if-not-exists --topic featured-transactions --bootstrap-server kafka:9092 --replication-factor 1 --partitions 3 &&
+      kafka-topics --create --if-not-exists --topic reconstruction-errors --bootstrap-server kafka:9092 --replication-factor 1 --partitions 3 &&
       kafka-topics --create --if-not-exists --topic alerts --bootstrap-server kafka:9092 --replication-factor 1 --partitions 3 &&
       kafka-topics --create --if-not-exists --topic explanations --bootstrap-server kafka:9092 --replication-factor 1 --partitions 3 &&
       kafka-topics --create --if-not-exists --topic performance-metrics --bootstrap-server kafka:9092 --replication-factor 1 --partitions 3
       '
 
+  ingestion:
+    build:
+      context: ./ingestion
+      dockerfile: Dockerfile
+    container_name: ingestion
+    restart: on-failure
+    depends_on:
+      - kafka
+    volumes:
+      - ./data:/data
+      - ./ingestion:/app
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      DATA_FILE_PATH: /data/PS_20174392719_1491204439457_log.csv
+      STREAM_SPEED_SEC: "0.1"
 
-  spark-master:
-    image: bitnami/spark:3.5.1
-    container_name: spark-master
+  feature-engineering:
+    build:
+      context: ./feature_engineering
+      dockerfile: Dockerfile
+    container_name: feature-engineering
+    restart: on-failure
+    depends_on:
+      - kafka
+      - kafka-topics-init
+    volumes:
+      - ./feature_engineering:/app
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+
+  model-inference:
+    build:
+      context: ./model_inference
+      dockerfile: Dockerfile
+    container_name: model-inference
+    restart: on-failure
+    depends_on:
+      - kafka
+      - feature-engineering
+    volumes:
+      - ./model_inference:/app
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+
+  scoring:
+    build:
+      context: ./scoring
+      dockerfile: Dockerfile
+    container_name: scoring
+    restart: on-failure
+    depends_on:
+      - kafka
+      - model-inference
+    volumes:
+      - ./scoring:/app
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    container_name: dashboard
+    restart: on-failure
+    depends_on:
+      - kafka
+      - scoring
     ports:
-      - "8888:8080" # Spark Master UI
-      - "7077:7077"
       - "8501:8501"
     volumes:
-      - ./src:/home/n00b/workspace/ArtificialIntelligence/Dissertation/src
-      - ./artifacts:/home/n00b/workspace/ArtificialIntelligence/Dissertation/artifacts
-      - pip_cache:/.cache/pip
-    command: >
-      /bin/bash -c "
-        pip install -r /home/n00b/workspace/ArtificialIntelligence/Dissertation/src/v1/requirements.txt &&
-        /opt/bitnami/spark/sbin/start-master.sh
-      "
-
-  spark-worker:
-    image: bitnami/spark:3.5.1
-    container_name: spark-worker
-    depends_on:
-      - spark-master
+      - ./dashboard:/app
     environment:
-      - SPARK_MODE=worker
-      - SPARK_MASTER_URL=spark://spark-master:7077
-      - SPARK_WORKER_MEMORY=5g
-      - SPARK_EXECUTOR_MEMORY=2g
-    volumes:
-      - ./src:/home/n00b/workspace/ArtificialIntelligence/Dissertation/src
-      - ./artifacts:/home/n00b/workspace/ArtificialIntelligence/Dissertation/artifacts
-      - pip_cache:/.cache/pip
-    command: >
-      /bin/bash -c "
-        pip install -r /home/n00b/workspace/ArtificialIntelligence/Dissertation/src/v1/requirements.txt &&
-        /opt/bitnami/spark/sbin/start-worker.sh spark://spark-master:7077
-      "
-
-volumes:
-  pip_cache:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
